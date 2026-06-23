@@ -7,6 +7,7 @@
 - [x] Implementation plan created and approved
 - [x] `gitlab-mcp.pl` implemented with 20 tools
 - [x] First review fixes applied (--env parsing, safe curl, file create/update, docs)
+- [x] Second review fixes applied (non-deadlocking curl I/O, DESIGN.md sync)
 - [x] README updated with full documentation
 - [x] Memory Bank docs created
 - [x] `perl -c gitlab-mcp.pl` passes
@@ -18,7 +19,7 @@
 
 ## Current Work
 
-Issue #1 is in `act/review`. Pull Request #2 (`feature/1 → main`) received review fixes and is awaiting follow-up review.
+Issue #1 is in `act/review`. Pull Request #2 (`feature/1 → main`) received two rounds of review fixes and is awaiting final review.
 
 ## Known Issues
 

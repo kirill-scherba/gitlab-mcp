@@ -68,7 +68,7 @@ All tools live in `%tool_handlers` mapping `name → { description, inputSchema,
 2. **No Safe sandbox** — direct Perl execution like `github-mcp.pl`; token is never exposed to generated/sandboxed code.
 3. **curl over HTTP library** — keeps dependencies to core Perl modules.
 4. **Configurable host** — supports gitlab.com and self-managed instances from the same binary.
-5. **Auto-detect create vs update for files** — tries POST first, falls back to PUT on 4xx.
+5. **Auto-detect create vs update for files** — tries POST first; if GitLab returns `400` with "already exists", falls back to PUT for update.
 
 ## Tool Categories
 

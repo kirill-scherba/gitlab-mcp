@@ -138,6 +138,10 @@ sub _encode_file_path {
 
 # ---------------------------------------------------------------------------
 # GitLab REST API helper (via curl, invoked safely with IPC::Open3)
+#
+# Response body is written to a temp file via curl --output, while stdout
+# only carries the HTTP status code from -w '%{http_code}'. This avoids
+# pipe-buffer deadlocks on large GitLab responses.
 # ---------------------------------------------------------------------------
 sub _gitlab_api {
     my ($method, $path, $body) = @_;
@@ -171,28 +175,39 @@ sub _gitlab_api {
         push @cmd, '--data-binary', "\@$tmp_body";
     }
 
+    my $out_tmp = "/tmp/_gitlab_out_$$.json";
+    push @cmd, '--output', $out_tmp;
+
     my $chld_out = gensym();
     my $chld_err = gensym();
     my $pid = eval { open3(undef, $chld_out, $chld_err, @cmd, $url) };
     if ($@ || !$pid) {
         unlink $tmp_body if defined $tmp_body && -f $tmp_body;
+        unlink $out_tmp if -f $out_tmp;
         return { success => 0, status => 0, reason => "Failed to start curl: $@" };
     }
 
     waitpid($pid, 0);
     my $exit_code = $? >> 8;
 
-    my $result = do { local $/; <$chld_out> } // '';
+    my $http_code = do { local $/; <$chld_out> } // '';
     close $chld_out;
     close $chld_err;
-    unlink $tmp_body if defined $tmp_body && -f $tmp_body;
-
-    my $http_code = '';
-    if (length($result) >= 3) {
-        $http_code = substr($result, -3, 3);
-        $result    = substr($result, 0, -3);
-    }
     $http_code =~ s/\s+//g;
+
+    my $result = '';
+    if (-f $out_tmp) {
+        open(my $fh, '<', $out_tmp) or return {
+            success => 0,
+            status  => 0,
+            reason  => "Cannot read response temp file: $!",
+        };
+        $result = do { local $/; <$fh> } // '';
+        close $fh;
+    }
+
+    unlink $tmp_body if defined $tmp_body && -f $tmp_body;
+    unlink $out_tmp if -f $out_tmp;
 
     log_message("DEBUG", "_gitlab_api: HTTP $http_code, response_len=" . length($result) . ", curl_exit=$exit_code");
 
