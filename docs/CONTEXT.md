@@ -13,12 +13,14 @@
 
 ## Recent Decisions
 
-- Architecture mirrors `github-mcp.pl` exactly: JSON-RPC 2.0 over stdin/stdout, tool registry (`%tool_handlers`), curl-based API helper.
-- Auth via `GITLAB_TOKEN` env var or `--env gitlab_token=...` argument.
+- Architecture mirrors `github-mcp.pl`: JSON-RPC 2.0 over stdin/stdout, tool registry (`%tool_handlers`), curl-based API helper.
+- Auth via `GITLAB_TOKEN` env var or `--env gitlab_token=...` / `--env gitlab_token ...` arguments.
 - Self-managed GitLab supported via `GITLAB_HOST` env var.
 - GitLab API helper uses `PRIVATE-TOKEN` header and `/api/v4` base path.
+- `curl` is invoked safely through `IPC::Open3` with a list of arguments (no shell interpolation).
 - Project identifiers accept numeric IDs or `namespace/project` paths (slashes URL-encoded to `%2F`).
 - File paths are URL-encoded when used in repository-files API endpoints.
+- URL encoding is implemented locally; no external `URI::Escape` dependency.
 
 ## Operation Order
 

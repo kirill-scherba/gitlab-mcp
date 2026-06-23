@@ -51,15 +51,16 @@ All tools live in `%tool_handlers` mapping `name → { description, inputSchema,
 
 - Constructs URL: `$GITLAB_HOST/api/v4$path`.
 - Adds `PRIVATE-TOKEN` header for authentication.
-- Shells out to `curl` for HTTP requests.
+- Invokes `curl` through `IPC::Open3` with a flat argument list; no shell interpolation.
 - Captures HTTP code from `curl -w '%{http_code}'`.
 - Decodes JSON response; surfaces GitLab `message`/`error` fields in error messages.
+- Empty responses are treated as success only when HTTP code is 2xx.
 
 ### URL Encoding
 
 - `_gitlab_project_id` converts `namespace/project` to `namespace%2Fproject`.
 - `_encode_file_path` URL-escapes file path segments for repository-files endpoints.
-- `_uri_escape` escapes query parameter values.
+- `_uri_escape` escapes query parameter values using a local implementation (no `URI::Escape` dependency).
 
 ## Design Decisions
 

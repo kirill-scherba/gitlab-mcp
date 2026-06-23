@@ -14,7 +14,7 @@ Modeled after [kirill-scherba/github-mcp](https://github.com/kirill-scherba/gith
 - **Self-managed GitLab** — configurable via `GITLAB_HOST`
 - **Clean JSON-RPC 2.0** — MCP protocol over stdin/stdout
 - **Structured logging** — all logs to stderr, stdout clean for JSON-RPC
-- **Zero external dependencies** — `perl`, `JSON`, `MIME::Base64`, `URI::Escape` (core), and `curl`
+- **Zero external dependencies** — `perl`, `JSON`, `MIME::Base64` (core), `IPC::Open3` (core), and `curl`
 
 ## Tools
 
@@ -46,12 +46,14 @@ Modeled after [kirill-scherba/github-mcp](https://github.com/kirill-scherba/gith
 ### Prerequisites
 
 ```bash
-# Perl modules (JSON is in core since 5.38+)
-# URI::Escape is core since Perl 5
+# Perl modules (JSON and MIME::Base64 are core since 5.38+)
+# IPC::Open3 is Perl core
 # curl for GitLab API calls
 sudo apt install curl   # Debian/Ubuntu
 sudo pacman -S curl     # Arch Linux
 ```
+
+All Perl modules used are part of the standard Perl core distribution.
 
 ### Setup
 
@@ -126,7 +128,7 @@ export GITLAB_HOST="gitlab.dev.redpad.games"   # default: gitlab.com
 {
   "project": "my-group/my-project",
   "title": "Test task: MCP integration check",
-  "body": "Created via gitlab-mcp MCP server",
+  "description": "Created via gitlab-mcp MCP server",
   "labels": "test"
 }
 ```

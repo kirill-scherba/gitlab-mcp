@@ -18,7 +18,8 @@ use utf8;
 use JSON;
 use POSIX qw(strftime);
 use MIME::Base64;
-use URI::Escape;
+use IPC::Open3;
+use Symbol 'gensym';
 
 use English '-no_match_vars';
 
@@ -31,12 +32,28 @@ binmode(STDERR, ":utf8");
 
 # ---------------------------------------------------------------------------
 # Parse --env key=value arguments
+# Supports both forms:
+#   --env key=value
+#   --env key value   (legacy/split form, only when first arg lacks '=')
 # ---------------------------------------------------------------------------
 my %env_args;
-for my $arg (@ARGV) {
-    if ($arg =~ /^--env\s+([^=]+)=(.*)$/) {
+my $i = 0;
+while ($i < @ARGV) {
+    my $arg = $ARGV[$i];
+    if ($arg eq '--env') {
+        my $next = $ARGV[++$i] // '';
+        if ($next =~ /^([^=]+)=(.*)$/) {
+            $env_args{$1} = $2;
+        }
+        elsif ($next ne '' && $i + 1 < @ARGV) {
+            # --env key value
+            $env_args{$next} = $ARGV[++$i];
+        }
+    }
+    elsif ($arg =~ /^--env\s+([^=]+)=(.*)$/) {
         $env_args{$1} = $2;
     }
+    $i++;
 }
 
 # ---------------------------------------------------------------------------
@@ -98,7 +115,9 @@ sub send_notification {
 # ---------------------------------------------------------------------------
 sub _uri_escape {
     my ($str) = @_;
-    return uri_escape_utf8($str, '^A-Za-z0-9\-\_\.\~');
+    return '' unless defined $str;
+    $str =~ s/([^A-Za-z0-9\-_\.\~])/sprintf('%%%02X', ord($1))/ge;
+    return $str;
 }
 
 sub _gitlab_project_id {
@@ -118,7 +137,7 @@ sub _encode_file_path {
 }
 
 # ---------------------------------------------------------------------------
-# GitLab REST API helper (via curl)
+# GitLab REST API helper (via curl, invoked safely with IPC::Open3)
 # ---------------------------------------------------------------------------
 sub _gitlab_api {
     my ($method, $path, $body) = @_;
@@ -130,15 +149,14 @@ sub _gitlab_api {
 
     log_message("DEBUG", "_gitlab_api: $method $url");
 
-    my $body_arg   = '';
-    my $header_arg = '-s';
-
-    if ($token) {
-        $header_arg .= " -H 'PRIVATE-TOKEN: $token'";
-    }
-    $header_arg .= " -H 'User-Agent: gitlab-mcp/1.0'";
-    $header_arg .= " -H 'Accept: application/json'";
-    $header_arg .= " -H 'Content-Type: application/json'" if defined $body;
+    my @cmd = (
+        'curl', '-s', '-w', '%{http_code}', '-X', $method,
+        '--connect-timeout', '10', '--max-time', '30',
+        '-H', 'User-Agent: gitlab-mcp/1.0',
+        '-H', 'Accept: application/json',
+    );
+    push @cmd, '-H', "PRIVATE-TOKEN: $token" if $token;
+    push @cmd, '-H', 'Content-Type: application/json' if defined $body;
 
     my $tmp_body;
     if (defined $body) {
@@ -150,13 +168,23 @@ sub _gitlab_api {
         };
         print $fh $body;
         close $fh;
-        $body_arg = "--data-binary \@'$tmp_body'";
+        push @cmd, '--data-binary', "\@$tmp_body";
     }
 
-    my $cmd = "curl -s -w '%{http_code}' -X $method $header_arg $body_arg --connect-timeout 10 --max-time 30 '$url' 2>/dev/null";
-    log_message("DEBUG", "_gitlab_api: curl cmd generated");
+    my $chld_out = gensym();
+    my $chld_err = gensym();
+    my $pid = eval { open3(undef, $chld_out, $chld_err, @cmd, $url) };
+    if ($@ || !$pid) {
+        unlink $tmp_body if defined $tmp_body && -f $tmp_body;
+        return { success => 0, status => 0, reason => "Failed to start curl: $@" };
+    }
 
-    my $result = `$cmd`;
+    waitpid($pid, 0);
+    my $exit_code = $? >> 8;
+
+    my $result = do { local $/; <$chld_out> } // '';
+    close $chld_out;
+    close $chld_err;
     unlink $tmp_body if defined $tmp_body && -f $tmp_body;
 
     my $http_code = '';
@@ -166,10 +194,14 @@ sub _gitlab_api {
     }
     $http_code =~ s/\s+//g;
 
-    log_message("DEBUG", "_gitlab_api: HTTP $http_code, response_len=" . length($result));
+    log_message("DEBUG", "_gitlab_api: HTTP $http_code, response_len=" . length($result) . ", curl_exit=$exit_code");
 
-    # Empty body is valid for 204 No Content
-    if ($http_code eq '204' || $result eq '') {
+    if ($exit_code != 0 && $http_code eq '') {
+        return { success => 0, status => 0, reason => "curl failed with exit code $exit_code" };
+    }
+
+    # Explicit 2xx with empty body is success (includes 204)
+    if ($http_code =~ /^2/ && $result eq '') {
         return { success => 1, status => $http_code, data => {} };
     }
 
@@ -847,10 +879,9 @@ sub tool_gitlab_file_create_or_update {
     my $author_name    = $args->{author_name}    // undef;
     my $last_commit_id = $args->{last_commit_id} // undef;
 
-    my $encoded = encode_base64($content, '');
     my %payload = (
         branch         => $branch,
-        content        => $encoded,
+        content        => $content,
         commit_message => $commit_message,
     );
     $payload{start_branch}   = $start_branch   if defined $start_branch;
@@ -865,9 +896,11 @@ sub tool_gitlab_file_create_or_update {
     # Try create first (POST)
     my $res = _gitlab_api("POST", $api_path, $body_str);
 
-    # If file exists (typically 400), try update (PUT)
-    if (!$res->{success} && $res->{status} =~ /^4/) {
-        log_message("INFO", "File may exist, retrying with PUT for update");
+    # If file already exists (GitLab returns 400 with "already exists"), retry as update (PUT)
+    if (!$res->{success}
+        && $res->{status} == 400
+        && ($res->{reason} // '') =~ /already exists/i) {
+        log_message("INFO", "File exists, retrying with PUT for update");
         $res = _gitlab_api("PUT", $api_path, $body_str);
     }
 
