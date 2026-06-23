@@ -11,12 +11,14 @@
 - [x] `perl -c gitlab-mcp.pl` passes
 - [x] Basic MCP handshake and `tools/list` verified
 - [ ] Live integration test against `gitlab.dev.redpad.games`
+- [x] PR created and added to Matrica board as "In review"
+- [ ] Live integration test against `gitlab.dev.redpad.games`
 - [ ] PR reviewed and merged
 - [ ] Issue closed
 
 ## Current Work
 
-Issue #1 is in `act/in-progress`. The feature branch `feature/1` contains the full implementation. A PR will be created next.
+Issue #1 is in `act/review`. Pull Request #2 (`feature/1 → main`) has been created and is awaiting Kirill's review.
 
 ## Known Issues
 
@@ -27,8 +29,6 @@ Issue #1 is in `act/in-progress`. The feature branch `feature/1` contains the fu
 
 ## Next Steps
 
-1. Create Pull Request from `feature/1` to `main`.
-2. Add PR to Matrica project board as "In review".
-3. Move issue #1 status to "In review".
-4. Wait for Kirill's review.
-5. After merge, close issue and mark as "Done".
+1. Wait for Kirill's review of PR #2.
+2. If review comments require changes, update the PR and re-request review.
+3. After merge, close issue #1 and mark as "Done".
