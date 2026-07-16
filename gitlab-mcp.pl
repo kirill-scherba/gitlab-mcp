@@ -57,7 +57,7 @@ while ($i < @ARGV) {
 }
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — single host + multi-host via GITLAB_<name>_HOST env vars
 # ---------------------------------------------------------------------------
 my $GITLAB_TOKEN = $env_args{gitlab_token} // $ENV{GITLAB_TOKEN} // '';
 my $GITLAB_HOST  = $env_args{gitlab_host} // $ENV{GITLAB_HOST}  // 'https://gitlab.com';
@@ -67,6 +67,29 @@ $GITLAB_HOST = "https://$GITLAB_HOST" unless $GITLAB_HOST =~ /^https?:\/\//;
 
 log_message("INFO", "GITLAB_TOKEN " . ($GITLAB_TOKEN ? 'found' : 'NOT found'));
 log_message("INFO", "GITLAB_HOST $GITLAB_HOST");
+
+# ---------------------------------------------------------------------------
+# Resolve token for a given host.
+# Scans GITLAB_<name>_HOST env vars for a match, then uses GITLAB_<name>_TOKEN.
+# Falls back to $GITLAB_TOKEN.
+# ---------------------------------------------------------------------------
+sub _resolve_token {
+    my ($host) = @_;
+    $host //= $GITLAB_HOST;
+    $host = "https://$host" unless $host =~ /^https?:\/\//;
+    foreach my $key (keys %ENV) {
+        if ($key =~ /^GITLAB_(.+)_HOST$/) {
+            my $name   = $1;
+            my $envval = $ENV{$key};
+            $envval = "https://$envval" unless $envval =~ /^https?:\/\//;
+            if ($envval eq $host) {
+                my $token_key = "GITLAB_${name}_TOKEN";
+                return $ENV{$token_key} if exists $ENV{$token_key};
+            }
+        }
+    }
+    return $GITLAB_TOKEN;
+}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -144,12 +167,13 @@ sub _encode_file_path {
 # pipe-buffer deadlocks on large GitLab responses.
 # ---------------------------------------------------------------------------
 sub _gitlab_api {
-    my ($method, $path, $body) = @_;
+    my ($method, $path, $body, $host) = @_;
     $method = uc($method // 'GET');
     $path   //= '/';
+    $host   //= $GITLAB_HOST;
 
-    my $token = $GITLAB_TOKEN;
-    my $url   = "$GITLAB_HOST/api/v4$path";
+    my $token = _resolve_token($host);
+    my $url   = "$host/api/v4$path";
 
     log_message("DEBUG", "_gitlab_api: $method $url");
 
@@ -246,8 +270,10 @@ sub _gitlab_api {
 # Helper: ensure token is present
 # ---------------------------------------------------------------------------
 sub _require_token {
+    my ($host) = @_;
+    $host //= $GITLAB_HOST;
     die "GITLAB_TOKEN is not set. Provide via --env gitlab_token=... or GITLAB_TOKEN environment variable."
-        unless $GITLAB_TOKEN;
+        unless _resolve_token($host);
 }
 
 # ---------------------------------------------------------------------------
@@ -255,7 +281,8 @@ sub _require_token {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_project_list {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $membership = $args->{membership} // 'true';
     my $search     = $args->{search}     // undef;
@@ -266,7 +293,7 @@ sub tool_gitlab_project_list {
     my $path = "/projects?membership=$membership&per_page=$limit&order_by=$order_by&sort=$sort";
     $path .= "&search=" . _uri_escape($search) if $search;
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my @projects;
@@ -291,12 +318,13 @@ sub tool_gitlab_project_list {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_project_get {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project = $args->{project} or die "Missing required: project";
     my $pid     = _gitlab_project_id($project);
 
-    my $res = _gitlab_api("GET", "/projects/$pid");
+    my $res = _gitlab_api("GET", "/projects/$pid", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $p = $res->{data};
@@ -321,7 +349,8 @@ sub tool_gitlab_project_get {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_issue_list {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project  = $args->{project}  or die "Missing required: project";
     my $state    = $args->{state}    // 'opened';
@@ -334,7 +363,7 @@ sub tool_gitlab_issue_list {
     my $path = "/projects/$pid/issues?state=$state&per_page=$limit&order_by=$order_by&sort=$sort";
     $path .= "&labels=" . _uri_escape($labels) if $labels;
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my @issues;
@@ -358,13 +387,14 @@ sub tool_gitlab_issue_list {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_issue_get {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project   = $args->{project}   or die "Missing required: project";
     my $issue_iid = $args->{issue_iid} or die "Missing required: issue_iid";
 
     my $pid = _gitlab_project_id($project);
-    my $res = _gitlab_api("GET", "/projects/$pid/issues/$issue_iid");
+    my $res = _gitlab_api("GET", "/projects/$pid/issues/$issue_iid", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $issue = $res->{data};
@@ -390,7 +420,8 @@ sub tool_gitlab_issue_get {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_issue_create {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project     = $args->{project}     or die "Missing required: project";
     my $title       = $args->{title}       or die "Missing required: title";
@@ -406,7 +437,7 @@ sub tool_gitlab_issue_create {
 
     my $body_str = $json_pp_encoder->encode(\%payload);
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("POST", "/projects/$pid/issues", $body_str);
+    my $res      = _gitlab_api("POST", "/projects/$pid/issues", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $issue = $res->{data};
@@ -424,7 +455,8 @@ sub tool_gitlab_issue_create {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_issue_update {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project   = $args->{project}   or die "Missing required: project";
     my $issue_iid = $args->{issue_iid} or die "Missing required: issue_iid";
@@ -441,7 +473,7 @@ sub tool_gitlab_issue_update {
 
     my $body_str = $json_pp_encoder->encode(\%payload);
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("PUT", "/projects/$pid/issues/$issue_iid", $body_str);
+    my $res      = _gitlab_api("PUT", "/projects/$pid/issues/$issue_iid", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $issue = $res->{data};
@@ -458,7 +490,8 @@ sub tool_gitlab_issue_update {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_issue_add_comment {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project   = $args->{project}   or die "Missing required: project";
     my $issue_iid = $args->{issue_iid} or die "Missing required: issue_iid";
@@ -466,7 +499,7 @@ sub tool_gitlab_issue_add_comment {
 
     my $body_str = $json_pp_encoder->encode({ body => $body });
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("POST", "/projects/$pid/issues/$issue_iid/notes", $body_str);
+    my $res      = _gitlab_api("POST", "/projects/$pid/issues/$issue_iid/notes", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $note = $res->{data};
@@ -483,7 +516,8 @@ sub tool_gitlab_issue_add_comment {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_list {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project  = $args->{project}  or die "Missing required: project";
     my $state    = $args->{state}    // 'opened';
@@ -496,7 +530,7 @@ sub tool_gitlab_mr_list {
     my $path = "/projects/$pid/merge_requests?state=$state&per_page=$limit&order_by=$order_by&sort=$sort";
     $path .= "&labels=" . _uri_escape($labels) if $labels;
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my @mrs;
@@ -521,7 +555,8 @@ sub tool_gitlab_mr_list {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_get {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project = $args->{project} or die "Missing required: project";
     my $mr_iid  = $args->{mr_iid}  or die "Missing required: mr_iid";
@@ -529,13 +564,13 @@ sub tool_gitlab_mr_get {
     my $pid = _gitlab_project_id($project);
 
     # Get MR details
-    my $res = _gitlab_api("GET", "/projects/$pid/merge_requests/$mr_iid");
+    my $res = _gitlab_api("GET", "/projects/$pid/merge_requests/$mr_iid", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $mr = $res->{data};
 
     # Get diff as separate call
-    my $diff_res = _gitlab_api("GET", "/projects/$pid/merge_requests/$mr_iid/diffs");
+    my $diff_res = _gitlab_api("GET", "/projects/$pid/merge_requests/$mr_iid/diffs", undef, $host);
     my @diffs;
     if ($diff_res->{success}) {
         @diffs = @{$diff_res->{data} // []};
@@ -565,7 +600,8 @@ sub tool_gitlab_mr_get {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_create {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project        = $args->{project}        or die "Missing required: project";
     my $title          = $args->{title}          or die "Missing required: title";
@@ -588,7 +624,7 @@ sub tool_gitlab_mr_create {
 
     my $body_str = $json_pp_encoder->encode(\%payload);
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests", $body_str);
+    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $mr = $res->{data};
@@ -608,7 +644,8 @@ sub tool_gitlab_mr_create {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_merge {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project        = $args->{project}        or die "Missing required: project";
     my $mr_iid         = $args->{mr_iid}         or die "Missing required: mr_iid";
@@ -625,7 +662,7 @@ sub tool_gitlab_mr_merge {
 
     my $body_str = $json_pp_encoder->encode(\%payload);
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("PUT", "/projects/$pid/merge_requests/$mr_iid/merge", $body_str);
+    my $res      = _gitlab_api("PUT", "/projects/$pid/merge_requests/$mr_iid/merge", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $mr = $res->{data};
@@ -642,7 +679,8 @@ sub tool_gitlab_mr_merge {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_approve {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project = $args->{project} or die "Missing required: project";
     my $mr_iid  = $args->{mr_iid}  or die "Missing required: mr_iid";
@@ -653,7 +691,7 @@ sub tool_gitlab_mr_approve {
 
     my $body_str = $json_pp_encoder->encode(\%payload);
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests/$mr_iid/approve", $body_str);
+    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests/$mr_iid/approve", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $data = $res->{data};
@@ -669,7 +707,8 @@ sub tool_gitlab_mr_approve {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_add_comment {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project = $args->{project} or die "Missing required: project";
     my $mr_iid  = $args->{mr_iid}  or die "Missing required: mr_iid";
@@ -677,7 +716,7 @@ sub tool_gitlab_mr_add_comment {
 
     my $body_str = $json_pp_encoder->encode({ body => $body });
     my $pid      = _gitlab_project_id($project);
-    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests/$mr_iid/notes", $body_str);
+    my $res      = _gitlab_api("POST", "/projects/$pid/merge_requests/$mr_iid/notes", $body_str, $host);
     die $res->{reason} unless $res->{success};
 
     my $note = $res->{data};
@@ -694,7 +733,8 @@ sub tool_gitlab_mr_add_comment {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_mr_list_comments {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project = $args->{project} or die "Missing required: project";
     my $mr_iid  = $args->{mr_iid}  or die "Missing required: mr_iid";
@@ -704,7 +744,7 @@ sub tool_gitlab_mr_list_comments {
     my $pid = _gitlab_project_id($project);
     my $path = "/projects/$pid/merge_requests/$mr_iid/notes?per_page=$limit&sort=$sort";
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my @comments;
@@ -725,7 +765,8 @@ sub tool_gitlab_mr_list_comments {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_pipeline_list {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project  = $args->{project}  or die "Missing required: project";
     my $status   = $args->{status}   // undef;
@@ -739,7 +780,7 @@ sub tool_gitlab_pipeline_list {
     $path .= "&status=" . _uri_escape($status) if $status;
     $path .= "&ref="    . _uri_escape($ref)    if $ref;
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my @pipelines;
@@ -763,13 +804,14 @@ sub tool_gitlab_pipeline_list {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_pipeline_get {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project     = $args->{project}     or die "Missing required: project";
     my $pipeline_id = $args->{pipeline_id} or die "Missing required: pipeline_id";
 
     my $pid = _gitlab_project_id($project);
-    my $res = _gitlab_api("GET", "/projects/$pid/pipelines/$pipeline_id");
+    my $res = _gitlab_api("GET", "/projects/$pid/pipelines/$pipeline_id", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $p = $res->{data};
@@ -795,13 +837,14 @@ sub tool_gitlab_pipeline_get {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_pipeline_retry {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project     = $args->{project}     or die "Missing required: project";
     my $pipeline_id = $args->{pipeline_id} or die "Missing required: pipeline_id";
 
     my $pid = _gitlab_project_id($project);
-    my $res = _gitlab_api("POST", "/projects/$pid/pipelines/$pipeline_id/retry");
+    my $res = _gitlab_api("POST", "/projects/$pid/pipelines/$pipeline_id/retry", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $p = $res->{data};
@@ -818,13 +861,14 @@ sub tool_gitlab_pipeline_retry {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_pipeline_cancel {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project     = $args->{project}     or die "Missing required: project";
     my $pipeline_id = $args->{pipeline_id} or die "Missing required: pipeline_id";
 
     my $pid = _gitlab_project_id($project);
-    my $res = _gitlab_api("POST", "/projects/$pid/pipelines/$pipeline_id/cancel");
+    my $res = _gitlab_api("POST", "/projects/$pid/pipelines/$pipeline_id/cancel", undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $p = $res->{data};
@@ -841,7 +885,8 @@ sub tool_gitlab_pipeline_cancel {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_file_get {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project   = $args->{project}   or die "Missing required: project";
     my $file_path = $args->{file_path} or die "Missing required: file_path";
@@ -851,7 +896,7 @@ sub tool_gitlab_file_get {
     my $path = "/projects/$pid/repository/files/" . _encode_file_path($file_path);
     $path .= "?ref=" . _uri_escape($ref) if $ref;
 
-    my $res = _gitlab_api("GET", $path);
+    my $res = _gitlab_api("GET", $path, undef, $host);
     die $res->{reason} unless $res->{success};
 
     my $data = $res->{data};
@@ -882,7 +927,8 @@ sub tool_gitlab_file_get {
 # ---------------------------------------------------------------------------
 sub tool_gitlab_file_create_or_update {
     my ($args) = @_;
-    _require_token();
+    my $host = $args->{host};
+    _require_token($host);
 
     my $project        = $args->{project}        or die "Missing required: project";
     my $file_path      = $args->{file_path}      or die "Missing required: file_path";
@@ -909,14 +955,14 @@ sub tool_gitlab_file_create_or_update {
     my $api_path = "/projects/$pid/repository/files/" . _encode_file_path($file_path);
 
     # Try create first (POST)
-    my $res = _gitlab_api("POST", $api_path, $body_str);
+    my $res = _gitlab_api("POST", $api_path, $body_str, $host);
 
     # If file already exists (GitLab returns 400 with "already exists"), retry as update (PUT)
     if (!$res->{success}
         && $res->{status} == 400
         && ($res->{reason} // '') =~ /already exists/i) {
         log_message("INFO", "File exists, retrying with PUT for update");
-        $res = _gitlab_api("PUT", $api_path, $body_str);
+        $res = _gitlab_api("PUT", $api_path, $body_str, $host);
     }
 
     die $res->{reason} unless $res->{success};
@@ -944,6 +990,7 @@ my %tool_handlers = (
                 limit      => { type => "number", description => "Max results (default: 30)" },
                 order_by   => { type => "string", description => "Field to order by: id, name, path, created_at, updated_at, last_activity_at (default: last_activity_at)" },
                 sort       => { type => "string", description => "Sort order: asc or desc (default: desc)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_project_list,
@@ -955,6 +1002,7 @@ my %tool_handlers = (
             required => ["project"],
             properties => {
                 project => { type => "string", description => "Project ID (numeric) or URL-encoded path (namespace/project)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_project_get,
@@ -971,6 +1019,7 @@ my %tool_handlers = (
                 limit    => { type => "number", description => "Max results (default: 30)" },
                 order_by => { type => "string", description => "created_at or updated_at (default: created_at)" },
                 sort     => { type => "string", description => "asc or desc (default: desc)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_issue_list,
@@ -983,6 +1032,7 @@ my %tool_handlers = (
             properties => {
                 project   => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 issue_iid => { type => "number", description => "Issue IID (project-scoped)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_issue_get,
@@ -999,6 +1049,7 @@ my %tool_handlers = (
                 labels       => { type => "string", description => "Comma-separated label names (optional)" },
                 assignee_ids => { type => "array", items => { type => "number" }, description => "Array of user IDs to assign (optional)" },
                 due_date     => { type => "string", description => "Due date in YYYY-MM-DD format (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_issue_create,
@@ -1017,6 +1068,7 @@ my %tool_handlers = (
                 labels       => { type => "string", description => "Comma-separated label names (optional)" },
                 assignee_ids => { type => "array", items => { type => "number" }, description => "Array of user IDs (optional)" },
                 due_date     => { type => "string", description => "Due date in YYYY-MM-DD format (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_issue_update,
@@ -1030,6 +1082,7 @@ my %tool_handlers = (
                 project   => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 issue_iid => { type => "number", description => "Issue IID (project-scoped)" },
                 body      => { type => "string", description => "Comment body text" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_issue_add_comment,
@@ -1046,6 +1099,7 @@ my %tool_handlers = (
                 limit    => { type => "number", description => "Max results (default: 30)" },
                 order_by => { type => "string", description => "created_at or updated_at (default: created_at)" },
                 sort     => { type => "string", description => "asc or desc (default: desc)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_list,
@@ -1058,6 +1112,7 @@ my %tool_handlers = (
             properties => {
                 project => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 mr_iid  => { type => "number", description => "Merge request IID (project-scoped)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_get,
@@ -1076,6 +1131,7 @@ my %tool_handlers = (
                 squash                => { type => "boolean", description => "Squash commits on merge (optional)" },
                 remove_source_branch  => { type => "boolean", description => "Remove source branch after merge (optional)" },
                 draft                 => { type => "boolean", description => "Create as draft (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_create,
@@ -1092,6 +1148,7 @@ my %tool_handlers = (
                 should_remove_source_branch => { type => "boolean", description => "Remove source branch after merge (optional)" },
                 merge_commit_message        => { type => "string", description => "Merge commit message (optional)" },
                 squash_commit_message       => { type => "string", description => "Squash commit message (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_merge,
@@ -1105,6 +1162,7 @@ my %tool_handlers = (
                 project => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 mr_iid  => { type => "number", description => "Merge request IID" },
                 sha     => { type => "string", description => "HEAD SHA to approve (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_approve,
@@ -1118,6 +1176,7 @@ my %tool_handlers = (
                 project => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 mr_iid  => { type => "number", description => "Merge request IID" },
                 body    => { type => "string", description => "Comment body text" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_add_comment,
@@ -1132,6 +1191,7 @@ my %tool_handlers = (
                 mr_iid  => { type => "number", description => "Merge request IID" },
                 limit   => { type => "number", description => "Max results (default: 30)" },
                 sort    => { type => "string", description => "asc or desc (default: desc)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_mr_list_comments,
@@ -1148,6 +1208,7 @@ my %tool_handlers = (
                 limit    => { type => "number", description => "Max results (default: 30)" },
                 order_by => { type => "string", description => "id, status, ref, updated_at, or user_id (default: id)" },
                 sort     => { type => "string", description => "asc or desc (default: desc)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_pipeline_list,
@@ -1160,6 +1221,7 @@ my %tool_handlers = (
             properties => {
                 project     => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 pipeline_id => { type => "number", description => "Pipeline ID (global)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_pipeline_get,
@@ -1172,6 +1234,7 @@ my %tool_handlers = (
             properties => {
                 project     => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 pipeline_id => { type => "number", description => "Pipeline ID (global)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_pipeline_retry,
@@ -1184,6 +1247,7 @@ my %tool_handlers = (
             properties => {
                 project     => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 pipeline_id => { type => "number", description => "Pipeline ID (global)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_pipeline_cancel,
@@ -1197,6 +1261,7 @@ my %tool_handlers = (
                 project   => { type => "string", description => "Project ID (numeric) or URL-encoded path" },
                 file_path => { type => "string", description => "File path in repository" },
                 ref       => { type => "string", description => "Branch, tag, or commit SHA (optional, defaults to default branch)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_file_get,
@@ -1216,6 +1281,7 @@ my %tool_handlers = (
                 author_email   => { type => "string", description => "Author email (optional)" },
                 author_name    => { type => "string", description => "Author name (optional)" },
                 last_commit_id => { type => "string", description => "Last commit ID for optimistic locking (optional)" },
+                host => { type => "string", description => "GitLab host URL (optional, defaults to GITLAB_HOST)" },
             },
         },
         handler => \&tool_gitlab_file_create_or_update,
