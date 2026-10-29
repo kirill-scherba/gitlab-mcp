@@ -26,7 +26,15 @@ use Symbol 'gensym';
 
 # Portable bits: Windows has no /tmp and calls the tool curl.exe, so both are resolved here instead of
 # being hard-coded. The MCP is built as a single binary (go-perl) and must run on Windows unchanged.
-my $TMPDIR = File::Spec->tmpdir() || File::Spec->catdir(File::Spec->rootdir(), 'tmp');
+# The temp directory comes from the host when it says so: a Unix Perl mangles a Windows path
+# ("C:/x" becomes "/C:/x" through File::Spec), and curl then fails with exit 23.
+my $TMPDIR = $ENV{GITLAB_MCP_TMPDIR} || File::Spec->tmpdir() || '/tmp';
+$TMPDIR =~ s{[/\\]+$}{};
+
+sub _tmp_path {
+    my ($name) = @_;
+    return "$TMPDIR/$name";
+}
 my $CURL   = ($^O =~ /MSWin32/i) ? 'curl.exe' : 'curl';
 
 use English '-no_match_vars';
@@ -196,7 +204,7 @@ sub _gitlab_api {
 
     my $tmp_body;
     if (defined $body) {
-        $tmp_body = File::Spec->catfile($TMPDIR, "_gitlab_body_$$.json");
+        $tmp_body = _tmp_path("_gitlab_body_$$.json");
         open(my $fh, '>', $tmp_body) or return {
             success => 0,
             status  => 0,
@@ -207,8 +215,8 @@ sub _gitlab_api {
         push @cmd, '--data-binary', "\@$tmp_body";
     }
 
-    my $out_tmp = File::Spec->catfile($TMPDIR, "_gitlab_out_$$.json");
-    my $hdr_tmp = File::Spec->catfile($TMPDIR, "_gitlab_hdr_$$.txt");
+    my $out_tmp = _tmp_path("_gitlab_out_$$.json");
+    my $hdr_tmp = _tmp_path("_gitlab_hdr_$$.txt");
     push @cmd, '--output', $out_tmp, '--dump-header', $hdr_tmp;
 
     # No pipes: the child writes both body and headers to files, so the call works in any host - the

@@ -74,7 +74,8 @@ func run() error {
 	// create the file (exit 23) on Windows.
 	slashWork := filepath.ToSlash(workDir)
 	env := append([]string{}, os.Environ()...)
-	env = append(env, "TMPDIR="+slashWork, "TMP="+slashWork, "TEMP="+slashWork)
+	env = append(env, "TMPDIR="+slashWork, "TMP="+slashWork, "TEMP="+slashWork,
+		"GITLAB_MCP_TMPDIR="+slashWork)
 
 	p, err := perl.New(perl.Config{
 		FS:        hostFS{},
