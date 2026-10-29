@@ -69,8 +69,12 @@ func run() error {
 		return err
 	}
 
+	// Slashes, not backslashes: the guest builds its temp paths with File::Spec (which uses "/") and
+	// passes them to curl, so a path with mixed separators reaches the child as-is. curl then fails to
+	// create the file (exit 23) on Windows.
+	slashWork := filepath.ToSlash(workDir)
 	env := append([]string{}, os.Environ()...)
-	env = append(env, "TMPDIR="+workDir, "TMP="+workDir, "TEMP="+workDir)
+	env = append(env, "TMPDIR="+slashWork, "TMP="+slashWork, "TEMP="+slashWork)
 
 	p, err := perl.New(perl.Config{
 		FS:        hostFS{},
