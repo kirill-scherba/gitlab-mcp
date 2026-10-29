@@ -291,7 +291,16 @@ Contributions are welcome! Feel free to open issues or submit merge requests.
 
 ## License
 
-MIT © Kirill Scherba
+BSD 3-Clause © Kirill Scherba — see [LICENSE](LICENSE).
+
+The released binary also carries the Perl 5 interpreter, compiled in by way of
+[goccy/perlwasm2go](https://github.com/goccy/perlwasm2go). Perl keeps its own license: this project
+distributes it under the **Artistic License 1.0** (the alternative branch of Perl's dual
+Artistic/GPL grant), and the full texts ship with every release. Read
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) before redistributing the executable.
+
+GitLab is a trademark of GitLab Inc. This server is an independent, unofficial client of the
+GitLab API and is not affiliated with GitLab Inc.
 
 ---
 

@@ -46,7 +46,10 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           go build -trimpath -ldflags "-s -w" -o "${{ matrix.binary }}" ./cmd/gitlab-mcp
           zip="gitlab-mcp_${tag}_${{ matrix.platform }}.zip"
-          zip -q "$zip" "${{ matrix.binary }}"
+          # The Perl interpreter inside the binary is distributed under the Artistic License, so its
+          # notices travel with it: a release without LICENSES/ would be a redistribution of Perl
+          # with the license stripped off.
+          zip -q "$zip" "${{ matrix.binary }}" LICENSE THIRD-PARTY-NOTICES.md LICENSES/Artistic-1.0.txt LICENSES/GPL-1.0.txt
           sha256sum "$zip" > "$zip.sha256"
           cat "$zip.sha256"
           echo "ZIP=$zip" >> "$GITHUB_ENV"
