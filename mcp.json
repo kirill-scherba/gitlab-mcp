@@ -1,0 +1,36 @@
+{
+  "name": "gitlab-mcp",
+  "title": {
+    "ru": "GitLab",
+    "en": "GitLab"
+  },
+  "description": {
+    "ru": "Работа с GitLab: проекты, задачи, merge request'ы, пайплайны. Внутри — Perl.",
+    "en": "GitLab work: projects, issues, merge requests, pipelines. Perl inside."
+  },
+  "category": "dev",
+  "install": "binary",
+  "command": [
+    "gitlab-mcp"
+  ],
+  "entries": {
+    "linux-amd64": "gitlab-mcp",
+    "windows-amd64": "gitlab-mcp.exe"
+  },
+  "settings": [
+    {
+      "key": "GITLAB_HOST",
+      "label": "адрес инстанса по умолчанию",
+      "hint": "https://gitlab.com или свой",
+      "required": true
+    },
+    {
+      "key": "GITLAB_TOKEN",
+      "label": "personal access token, scope api",
+      "hint": "GitLab → User settings → Access tokens",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "docs": "https://github.com/kirill-scherba/gitlab-mcp#install-in-anytext"
+}
