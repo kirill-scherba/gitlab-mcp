@@ -15,11 +15,19 @@
 use strict;
 use warnings;
 use utf8;
-use JSON;
+# JSON::PP is core Perl: the server must run inside the embedded interpreter (go-perl), where a CPAN
+# module is not available. The API used here is identical.
+use JSON::PP;
 use POSIX qw(strftime);
 use MIME::Base64;
 use IPC::Open3;
+use File::Spec;
 use Symbol 'gensym';
+
+# Portable bits: Windows has no /tmp and calls the tool curl.exe, so both are resolved here instead of
+# being hard-coded. The MCP is built as a single binary (go-perl) and must run on Windows unchanged.
+my $TMPDIR = File::Spec->tmpdir() || File::Spec->catdir(File::Spec->rootdir(), 'tmp');
+my $CURL   = ($^O =~ /MSWin32/i) ? 'curl.exe' : 'curl';
 
 use English '-no_match_vars';
 
@@ -104,9 +112,9 @@ sub log_message {
 # ---------------------------------------------------------------------------
 # JSON-RPC helpers
 # ---------------------------------------------------------------------------
-my $json = JSON->new->allow_nonref;
-our $json_pp_encoder = JSON->new->allow_nonref;
-our $json_pp_decoder = JSON->new->allow_nonref;
+my $json = JSON::PP->new->allow_nonref;
+our $json_pp_encoder = JSON::PP->new->allow_nonref;
+our $json_pp_decoder = JSON::PP->new->allow_nonref;
 
 sub respond {
     my ($id, $result) = @_;
@@ -178,7 +186,7 @@ sub _gitlab_api {
     log_message("DEBUG", "_gitlab_api: $method $url");
 
     my @cmd = (
-        'curl', '-s', '-w', '%{http_code}', '-X', $method,
+        $CURL, '-s', '-X', $method,
         '--connect-timeout', '10', '--max-time', '30',
         '-H', 'User-Agent: gitlab-mcp/1.0',
         '-H', 'Accept: application/json',
@@ -188,7 +196,7 @@ sub _gitlab_api {
 
     my $tmp_body;
     if (defined $body) {
-        $tmp_body = "/tmp/_gitlab_body_$$.json";
+        $tmp_body = File::Spec->catfile($TMPDIR, "_gitlab_body_$$.json");
         open(my $fh, '>', $tmp_body) or return {
             success => 0,
             status  => 0,
@@ -199,24 +207,21 @@ sub _gitlab_api {
         push @cmd, '--data-binary', "\@$tmp_body";
     }
 
-    my $out_tmp = "/tmp/_gitlab_out_$$.json";
-    push @cmd, '--output', $out_tmp;
+    my $out_tmp = File::Spec->catfile($TMPDIR, "_gitlab_out_$$.json");
+    my $hdr_tmp = File::Spec->catfile($TMPDIR, "_gitlab_hdr_$$.txt");
+    push @cmd, '--output', $out_tmp, '--dump-header', $hdr_tmp;
 
-    my $chld_out = gensym();
-    my $chld_err = gensym();
-    my $pid = eval { open3(undef, $chld_out, $chld_err, @cmd, $url) };
-    if ($@ || !$pid) {
-        unlink $tmp_body if defined $tmp_body && -f $tmp_body;
-        unlink $out_tmp if -f $out_tmp;
-        return { success => 0, status => 0, reason => "Failed to start curl: $@" };
+    # No pipes: the child writes both body and headers to files, so the call works in any host - the
+    # embedded interpreter loses a child's stdout, and `curl -w` output disappeared with it.
+    my $rc = system($CURL, @cmd, $url);
+    my $exit_code = $rc >> 8;
+
+    my $http_code = '';
+    if (open(my $hf, '<', $hdr_tmp)) {
+        my $status_line = <$hf> // '';
+        close $hf;
+        $http_code = $1 if $status_line =~ m{^HTTP/\S+\s+(\d+)};
     }
-
-    waitpid($pid, 0);
-    my $exit_code = $? >> 8;
-
-    my $http_code = do { local $/; <$chld_out> } // '';
-    close $chld_out;
-    close $chld_err;
     $http_code =~ s/\s+//g;
 
     my $result = '';
@@ -232,6 +237,7 @@ sub _gitlab_api {
 
     unlink $tmp_body if defined $tmp_body && -f $tmp_body;
     unlink $out_tmp if -f $out_tmp;
+    unlink $hdr_tmp if -f $hdr_tmp;
 
     log_message("DEBUG", "_gitlab_api: HTTP $http_code, response_len=" . length($result) . ", curl_exit=$exit_code");
 
@@ -263,7 +269,12 @@ sub _gitlab_api {
         return { success => 0, status => $http_code, data => $data, reason => $reason };
     }
 
-    return { success => ($success ? 1 : 0), status => $http_code, data => $data };
+    return {
+        success => ($success ? 1 : 0),
+        status  => $http_code,
+        data    => $data,
+        reason  => ($success ? '' : "HTTP " . ($http_code || 'no code')),
+    };
 }
 
 # ---------------------------------------------------------------------------
