@@ -213,7 +213,7 @@ sub _gitlab_api {
 
     # No pipes: the child writes both body and headers to files, so the call works in any host - the
     # embedded interpreter loses a child's stdout, and `curl -w` output disappeared with it.
-    my $rc = system($CURL, @cmd, $url);
+    my $rc = system(@cmd, $url);
     my $exit_code = $rc >> 8;
 
     my $http_code = '';

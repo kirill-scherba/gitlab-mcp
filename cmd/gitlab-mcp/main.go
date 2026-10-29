@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	perl "github.com/goccy/go-perl"
-	"github.com/goccy/go-perl/fs"
 
 	gitlabmcp "github.com/kirill-scherba/gitlab-mcp"
 )
@@ -58,23 +57,32 @@ func run() error {
 	}
 	defer os.Remove(scriptPath.Name())
 
-	// Paths handed to the guest are POSIX-style: the interpreter is a Linux Perl, and a Windows path
-	// with backslashes is an I/O error for it. Windows itself accepts forward slashes, so the same
-	// string works for both sides.
-	guestScript := filepath.ToSlash(scriptPath.Name())
-	tmpDir := filepath.ToSlash(os.TempDir())
+	// A private directory for the script and for curl's temporary files: the guest and the host then
+	// agree on one place, and nothing of the user's is touched.
+	workDir, err := os.MkdirTemp("", "gitlab-mcp-work-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(workDir)
+	scriptName := filepath.Join(workDir, "gitlab-mcp.pl")
+	if err := os.WriteFile(scriptName, gitlabmcp.Script, 0o600); err != nil {
+		return err
+	}
 
 	env := append([]string{}, os.Environ()...)
-	env = append(env, "TMPDIR="+tmpDir, "TMP="+tmpDir, "TEMP="+tmpDir)
+	env = append(env, "TMPDIR="+workDir, "TMP="+workDir, "TEMP="+workDir)
 
 	p, err := perl.New(perl.Config{
-		FS:        fs.NewHostFS(),
+		FS:        hostFS{},
 		StdlibDir: filepath.ToSlash(stdlib),
 		Env:       env, // whatever the MCP host passed: tokens never live on the host system
 		Stdin:     os.Stdin,
 		Stdout:    os.Stdout,
 		Stderr:    os.Stderr,
 		Exec: func(path string, argv []string) bool {
+			if os.Getenv("GITLAB_MCP_DEBUG_FS") != "" {
+				fmt.Fprintf(os.Stderr, "exec: %s %q\n", path, argv)
+			}
 			switch strings.ToLower(filepath.Base(path)) {
 			case "curl", "curl.exe":
 				return true
@@ -90,5 +98,30 @@ func run() error {
 	}
 	defer p.Close()
 
-	return p.RunFile(context.Background(), guestScript, nil, os.Args[1:])
+	// The server runs from source, not from a file: the guest cannot open a host path (the library
+	// resolves `do $path` outside the configured filesystem), while open() calls the script makes later
+	// do go through it. The launcher is defined once, then called - Eval would capture the output, Call
+	// streams it, which is what an MCP server on stdio needs.
+	if _, err := p.Eval(context.Background(), runSourceGlue); err != nil {
+		return err
+	}
+	args := make([]perl.Value, 0, len(os.Args))
+	args = append(args, perl.ValueOf(string(gitlabmcp.Script)))
+	for _, a := range os.Args[1:] {
+		args = append(args, perl.ValueOf(a))
+	}
+	_, err = p.Call(context.Background(), "__run_source", args...)
+	return err
 }
+
+// runSourceGlue runs a Perl program given as text, with @ARGV set, without capturing its output.
+const runSourceGlue = `
+sub main::__run_source {
+    my ($src, @args) = @_;
+    local @ARGV = @args;
+    my $ok = eval $src;
+    die $@ if $@;
+    return $ok;
+}
+1;
+`
