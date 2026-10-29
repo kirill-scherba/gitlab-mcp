@@ -58,10 +58,19 @@ func run() error {
 	}
 	defer os.Remove(scriptPath.Name())
 
+	// Paths handed to the guest are POSIX-style: the interpreter is a Linux Perl, and a Windows path
+	// with backslashes is an I/O error for it. Windows itself accepts forward slashes, so the same
+	// string works for both sides.
+	guestScript := filepath.ToSlash(scriptPath.Name())
+	tmpDir := filepath.ToSlash(os.TempDir())
+
+	env := append([]string{}, os.Environ()...)
+	env = append(env, "TMPDIR="+tmpDir, "TMP="+tmpDir, "TEMP="+tmpDir)
+
 	p, err := perl.New(perl.Config{
 		FS:        fs.NewHostFS(),
-		StdlibDir: stdlib,
-		Env:       os.Environ(), // whatever the MCP host passed: tokens never live on the host system
+		StdlibDir: filepath.ToSlash(stdlib),
+		Env:       env, // whatever the MCP host passed: tokens never live on the host system
 		Stdin:     os.Stdin,
 		Stdout:    os.Stdout,
 		Stderr:    os.Stderr,
@@ -81,5 +90,5 @@ func run() error {
 	}
 	defer p.Close()
 
-	return p.RunFile(context.Background(), scriptPath.Name(), nil, os.Args[1:])
+	return p.RunFile(context.Background(), guestScript, nil, os.Args[1:])
 }
