@@ -7,6 +7,37 @@
 
 Modeled after [kirill-scherba/github-mcp](https://github.com/kirill-scherba/github-mcp). Uses direct `GITLAB_TOKEN` from environment — no sandbox limitations, full GitLab API access. Works with gitlab.com and self-managed instances (e.g. `gitlab.dev.redpad.games`).
 
+## Install in AnyText
+
+The server is published as a single binary for Linux and Windows - the Perl interpreter is compiled in,
+so nothing has to be installed next to it.
+
+1. AnyText → Настройки → MCP → «Доступные серверы» → **GitLab** → «Установить».
+2. Press the sliders button next to the installed entry and fill the environment:
+
+   | Setting | What it is | Where to get it |
+   |---|---|---|
+   | `GITLAB_HOST` | the instance the server talks to by default | `https://gitlab.com` or your own |
+   | `GITLAB_TOKEN` | personal access token with `api` scope | GitLab → User settings → Access tokens |
+
+3. «Сохранить» — the gateway restarts the server with that environment. The values live in the gateway
+   configuration (mode 0600), not in your shell and not in the engine's config.
+
+### Several instances at once
+
+Every pair `GITLAB_<NAME>_HOST` / `GITLAB_<NAME>_TOKEN` describes one more instance, and the tools accept
+an optional `host` argument:
+
+```
+GITLAB_HOST=https://gitlab.com
+GITLAB_TOKEN=glpat-…
+GITLAB_WORK_HOST=https://gitlab.example.com
+GITLAB_WORK_TOKEN=glpat-…
+```
+
+A call with `"host": "https://gitlab.example.com"` uses the second token.
+
+
 ## Features
 
 - **20 GitLab API tools** — merge requests, issues, pipelines, projects, files
